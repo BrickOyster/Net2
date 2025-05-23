@@ -3,10 +3,13 @@
 #include <string.h>
 #include <unistd.h>
 #include <argp.h>
+
 #include <sys/socket.h>
-#include <netinet/in.h>
+
 #include <arpa/inet.h>
-#include <netdb.h>
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <linux/if.h>
 #include <time.h>
 
 int PORT = 5001;
@@ -66,25 +69,28 @@ int main(int argc, char const* argv[]) {
     // Start listening for incoming connections
     listen(server_fd, 1);
 
+    struct ifaddrs *ifaddr, *ifa;
+    char IPbuffer[INET_ADDRSTRLEN] = "Unknown";
+
+    if (getifaddrs(&ifaddr) == -1) {
+        perror("Error while getting interfaces.");
+        exit(EXIT_FAILURE);
+    }
+
+    for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+        if (ifa->ifa_addr == NULL) continue;
+
+        if (ifa->ifa_addr->sa_family == AF_INET &&
+            !(ifa->ifa_flags & IFF_LOOPBACK)    &&
+            (ifa->ifa_flags & IFF_UP)             ) {
+            struct sockaddr_in *sa = (struct sockaddr_in *) ifa->ifa_addr;
+            inet_ntop(AF_INET, &sa->sin_addr, IPbuffer, sizeof(INET_ADDRSTRLEN));
+        }
+    }
+    freeifaddrs(ifaddr);
+
     char hostbuffer[256];
-    char *IPbuffer;
-    struct hostent *host_entry;
-    int hostname;
-
-    // To retrieve hostname
-    if ((hostname = gethostname(hostbuffer, sizeof(hostbuffer)) == -1)) {
-        perror("Error while getting hostname.");
-        exit(EXIT_FAILURE);
-    }
-
-    // To retrieve host information
-    if ((host_entry = gethostbyname(hostbuffer)) == NULL) {
-        perror("Error while getting host entry.");
-        exit(EXIT_FAILURE);
-    }
-
-    // address into ASCII string
-    IPbuffer = inet_ntoa(*((struct in_addr*) host_entry->h_addr_list[0]));
+    gethostname(hostbuffer, sizeof(hostbuffer));
     printf("Server %s listening on %s:%d...\n", hostbuffer, IPbuffer, PORT);
 
     // Main loop
