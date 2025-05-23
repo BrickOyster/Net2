@@ -80,11 +80,11 @@ int main(int argc, char const* argv[]) {
     for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
         if (ifa->ifa_addr == NULL) continue;
 
-        if (ifa->ifa_addr->sa_family == AF_INET &&
+        if ((ifa->ifa_addr->sa_family == AF_INET) &&
             !(ifa->ifa_flags & IFF_LOOPBACK)    &&
             (ifa->ifa_flags & IFF_UP)             ) {
             struct sockaddr_in *sa = (struct sockaddr_in *) ifa->ifa_addr;
-            inet_ntop(AF_INET, &sa->sin_addr, IPbuffer, sizeof(INET_ADDRSTRLEN));
+            inet_ntop(AF_INET, &sa->sin_addr, IPbuffer, INET_ADDRSTRLEN);
         }
     }
     freeifaddrs(ifaddr);
