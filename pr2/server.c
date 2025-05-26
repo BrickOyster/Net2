@@ -10,8 +10,7 @@
 #include <time.h>
 
 int PORT = 5001;
-int BUFFER_SIZE = 8192;
-int EXPERIMENT_DURATION = 31;
+int BUFFER_SIZE = 128 * 1024; // 128 KB default buffer size
 int INTERVAL = 2;
 
 int main(int argc, char const* argv[]) {
@@ -22,7 +21,7 @@ int main(int argc, char const* argv[]) {
     
     // Parse command line options
     int argopt;
-    while ((argopt = getopt(argc, (char * const *)argv, "p:b:d:i:")) != -1) {
+    while ((argopt = getopt(argc, (char * const *)argv, "p:b:i:hH?")) != -1) {
         switch (argopt) {
             case 'p':
                 PORT = atoi(optarg);
@@ -30,14 +29,14 @@ int main(int argc, char const* argv[]) {
             case 'b':
                 BUFFER_SIZE = atoi(optarg);
                 break;
-            case 'd':
-                EXPERIMENT_DURATION = atoi(optarg);
-                break;
             case 'i':
                 INTERVAL = atoi(optarg);
                 break;
+            case 'h' || 'H' || '?':
+                printf("Usage: %s [-p port] [-b buffer_size] [-i interval] [-h]/[-H]/[-?]\n", argv[0]);
+                exit(EXIT_SUCCESS);
             default:
-                fprintf(stderr, "Usage: %s [-p port] [-b buffer_size] [-d duration] [-i interval]\n", argv[0]);
+                fprintf(stderr, "Usage: %s [-p port] [-b buffer_size] [-i interval] [-h]/[-H]/[-?]\n", argv[0]);
                 exit(EXIT_FAILURE);
         }
     }
@@ -96,7 +95,8 @@ int main(int argc, char const* argv[]) {
         time_t start = time(NULL), now;
         size_t total_bytes = 0, interval_bytes = 0;
         
-        while ((now = time(NULL)) - start < EXPERIMENT_DURATION) {
+        while (1) {
+            now = time(NULL);
             // Receive data from the client
             ssize_t bytes = recv(new_socket, buffer, BUFFER_SIZE, 0);
             if (bytes <= 0) break; // Connection closed or error

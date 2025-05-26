@@ -8,13 +8,14 @@
 
 char *SERVER_IP = "0.0.0.0";  // Change to actual server IP
 int PORT = 5001;
-int BUFFER_SIZE = 8192;
+int BUFFER_SIZE = 128 * 1024; // 128 KB default buffer size
+int DURATION = 30;
 int INTERVAL = 2;
 
 int main(int argc, char const* argv[]) {
     // Parse command line options
     int argopt;
-    while ((argopt = getopt(argc, (char * const *)argv, "a:p:b:i:hH?")) != -1) {
+    while ((argopt = getopt(argc, (char * const *)argv, "a:p:b:i:d:hH?")) != -1) {
         switch (argopt) {
             case 'a':
                 SERVER_IP = optarg;
@@ -28,11 +29,14 @@ int main(int argc, char const* argv[]) {
             case 'i':
                 INTERVAL = atoi(optarg);
                 break;
+            case 'd':
+                DURATION = atoi(optarg);
+                break;
             case 'h' || 'H' || '?':
-                printf("Usage: %s [-a ip] [-p port] [-b buffer_size] [-i interval]\n", argv[0]);
+                printf("Usage: %s [-a ip] [-p port] [-b buffer_size] [-i interval [-d duration] [-h]/[-H]/[-?]]\n", argv[0]);
                 exit(EXIT_SUCCESS);
             default:
-                fprintf(stderr, "Usage: %s [-a ip] [-p port] [-b buffer_size] [-i interval] [-h]/[-H]/[-?]\n", argv[0]);
+                fprintf(stderr, "Usage: %s [-a ip] [-p port] [-b buffer_size] [-i interval] [-d duration] [-h]/[-H]/[-?]\n", argv[0]);
                 exit(EXIT_FAILURE);
         }
     }
@@ -64,8 +68,7 @@ int main(int argc, char const* argv[]) {
     time_t start = time(NULL), now;
     size_t interval_bytes = 0, total_bytes = 0;
 
-    while (1) {
-        now = time(NULL);
+    while ((now = time(NULL)) - start < DURATION + INTERVAL/10) {
         ssize_t bytes = send(sock, buffer, BUFFER_SIZE, 0);
         if (bytes <= 0) break;
 
