@@ -15,6 +15,7 @@
 int PORT = 5001;
 int BUFFER_SIZE = 128 * 1024; // 128 KB default buffer size
 int INTERVAL = 2;
+char* LOG_FILE = "throughput_log.json";
 
 int main(int argc, char const* argv[]) {
     int server_fd, new_socket;
@@ -24,22 +25,25 @@ int main(int argc, char const* argv[]) {
     
     // Parse command line options
     int argopt;
-    while ((argopt = getopt(argc, (char * const *)argv, "p:b:i:hH?")) != -1) {
+    while ((argopt = getopt(argc, (char * const *)argv, "p:b:i:f:hH?")) != -1) {
         switch (argopt) {
-            case 'p':
+            case 'p': // Port number
                 PORT = atoi(optarg);
                 break;
-            case 'b':
+            case 'b': // Buffer size
                 BUFFER_SIZE = atoi(optarg);
                 break;
-            case 'i':
+            case 'i': // Interval for throughput calculation
                 INTERVAL = atoi(optarg);
+                break; 
+            case 'f': // File to log throughput data
+                LOG_FILE = optarg;
                 break;
-            case 'h' || 'H' || '?':
-                printf("Usage: %s [-p port] [-b buffer_size] [-i interval] [-h]/[-H]/[-?]\n", argv[0]);
+            case 'h' || 'H' || '?': // Help option
+                printf("Usage: %s [-p port] [-b buffer_size] [-i interval] [-f log_file] [-h]/[-H]/[-?]\n", argv[0]);
                 exit(EXIT_SUCCESS);
             default:
-                fprintf(stderr, "Usage: %s [-p port] [-b buffer_size] [-i interval] [-h]/[-H]/[-?]\n", argv[0]);
+                fprintf(stderr, "Usage: %s [-p port] [-b buffer_size] [-i interval] [-f log_file] [-h]/[-H]/[-?]\n", argv[0]);
                 exit(EXIT_FAILURE);
         }
     }
@@ -51,6 +55,7 @@ int main(int argc, char const* argv[]) {
         exit(EXIT_FAILURE);
     }
 
+    // Set socket options to reuse address
     int opt = 1;
     setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
@@ -71,16 +76,18 @@ int main(int argc, char const* argv[]) {
     struct ifaddrs *ifaddr, *ifa;
     char IPbuffer[INET_ADDRSTRLEN] = "Unknown";
 
+    // Get the list of network interfaces
     if (getifaddrs(&ifaddr) == -1) {
         perror("Error while getting interfaces.");
         exit(EXIT_FAILURE);
     }
 
+    // Find the first non-loopback, up interface with an IPv4 address
     for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
-        if (ifa->ifa_addr == NULL) continue;
+        if (ifa->ifa_addr == NULL) continue; // Skip if no address
 
         if ((ifa->ifa_addr->sa_family == AF_INET) &&
-            !(ifa->ifa_flags & IFF_LOOPBACK)    &&
+            !(ifa->ifa_flags & IFF_LOOPBACK)      &&
             (ifa->ifa_flags & IFF_UP)             ) {
             struct sockaddr_in *sa = (struct sockaddr_in *) ifa->ifa_addr;
             inet_ntop(AF_INET, &sa->sin_addr, IPbuffer, INET_ADDRSTRLEN);
@@ -88,19 +95,35 @@ int main(int argc, char const* argv[]) {
     }
     freeifaddrs(ifaddr);
 
+    // Hostname
     char hostbuffer[256];
     gethostname(hostbuffer, sizeof(hostbuffer));
+    // Print server information
     printf("Server %s listening on %s:%d...\n", hostbuffer, IPbuffer, PORT);
 
     // Main loop
+    int first_run = 1;
+    FILE *logf = fopen(LOG_FILE, "w");
+    fprintf(logf, "{\"data\": [\n"); // Initialize JSON log file with an opening bracket
     while (1) {
+        if (first_run) { // If this is the first connection, do not add a comma
+            first_run = 0;
+        } else {
+            fseek(logf, -3, SEEK_CUR); // Move back to overwrite the last closing brackets
+            fprintf(logf, ",\n");
+        }
+
         // Accept a new connection
         new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen);
         printf("Client connected!\n");
 
-        time_t start = time(NULL), now;
+        time_t start = time(NULL), last_print = start, now;
         size_t total_bytes = 0, interval_bytes = 0;
         
+        fprintf(logf, // Prepare JSON log header for current connection
+            "{\n\t\"server\":\"%s\",\n\t\"port\":%d,\n\t\"start_time\":%ld,\n\t\"interval_seconds\":%d,\n\t\"buffer_size\":%d,\n\t\"log_file\":\"%s\",\n\t\"intervals\":[",
+            hostbuffer, PORT, start, INTERVAL, BUFFER_SIZE, LOG_FILE
+        );
         while (1) {
             now = time(NULL);
             // Receive data from the client
@@ -111,22 +134,37 @@ int main(int argc, char const* argv[]) {
             interval_bytes += bytes;
             
             // Print throughput every INTERVAL seconds
-            if ((now - start) % INTERVAL == 0 && interval_bytes > 0) {
+            if ((now - last_print) >= INTERVAL && interval_bytes > 0) {
                 // Calculate throughput in Mbps
                 // 1 byte = 8 bits, 1 Mbit = 1,048,576 bits
-                double throughput = (interval_bytes * 8.0) / (1048576.0 * INTERVAL);
-                double agg_throughput = (total_bytes * 8.0) / (1048576.0 * (now - start));
+                double throughput = (interval_bytes * 8.0) / (INTERVAL);
+                double agg_throughput = (total_bytes * 8.0) / ((now - start));
                 
-                printf("\r[+%ld sec] Throughput: %.2f Mbps, Total Throughput: %.2f Mbps          ", now - start, throughput, agg_throughput);
+                // Log throughput data in JSON format to a file
+                if (logf) {
+                    fprintf(logf,
+                        "\n\t{\n\t\t\"timestamp\":%ld,\n\t\t\"interval_bytes\":%zu,\n\t\t\"bits_per_second\":%.2f,\n\t\t\"total_throughput_mbps\":%.2f\n\t},",
+                        now - start,
+                        interval_bytes,
+                        throughput,
+                        agg_throughput
+                    );
+                }
+                
+                printf("\r[+%ld sec] Throughput: %.2f Mbps, Total Throughput: %.2f Mbps          ", now - start, throughput/1048576.0, agg_throughput/1048576.0);
                 fflush(stdout);
-                
+
                 interval_bytes = 0;
-                sleep(1);  // prevent multiple prints within 1 second
+                last_print = now;
             }
         }
+        fseek(logf, -1, SEEK_CUR); // Move back to overwrite the last comma
+        fprintf(logf, "\n\t]\n}\n]}"); // Close the JSON array and object
         printf("\n");
         close(new_socket);
     }
+
+    fclose(logf);
 
     close(server_fd);
     return 0;
