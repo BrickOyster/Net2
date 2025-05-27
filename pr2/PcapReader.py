@@ -127,14 +127,16 @@ class PcapReader:
             return 4 # Arbitrary value, means no signal strength (bad packet)
         
         # Get expected mcs
+        expected_mcs_value = expected_mcs[int(bandwidth)][0]
         for i, m in  enumerate(expected_mcs[int(bandwidth)]):
             if int(rssi) >= m:
-                expected_mcs = i
+                expected_mcs_value = i
             else:
                 break
         
         # Calculate phy gain
-        return expected_mcs + 8 * (spatial_streams-1) - int(mcs_index)
+        return expected_mcs_value + 8 * (spatial_streams-1) - int(mcs_index)
+
 
     def get_ssid(self, packet):
         """
