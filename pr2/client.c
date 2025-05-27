@@ -52,7 +52,7 @@ int main(int argc, char const* argv[]) {
         return -1;
     }
 
-    // Set socket options to reuse address
+    // Set socket options
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_port = htons(PORT);
 

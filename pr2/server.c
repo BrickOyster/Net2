@@ -15,6 +15,7 @@
 int PORT = 5001;
 int BUFFER_SIZE = 128 * 1024; // 128 KB default buffer size
 int INTERVAL = 2;
+int limit = -1;
 char* LOG_FILE = "throughput_log.json";
 
 int main(int argc, char const* argv[]) {
@@ -25,7 +26,7 @@ int main(int argc, char const* argv[]) {
     
     // Parse command line options
     int argopt;
-    while ((argopt = getopt(argc, (char * const *)argv, "p:b:i:f:hH?")) != -1) {
+    while ((argopt = getopt(argc, (char * const *)argv, "p:b:i:l:f:hH?")) != -1) {
         switch (argopt) {
             case 'p': // Port number
                 PORT = atoi(optarg);
@@ -36,14 +37,21 @@ int main(int argc, char const* argv[]) {
             case 'i': // Interval for throughput calculation
                 INTERVAL = atoi(optarg);
                 break; 
+            case 'l': // Connection limit
+                limit = atoi(optarg);
+                if (limit < 0) {
+                    fprintf(stderr, "Invalid connection limit: %d. Must be non-negative.\n", limit);
+                    exit(EXIT_FAILURE);
+                }
+                break;
             case 'f': // File to log throughput data
                 LOG_FILE = optarg;
                 break;
             case 'h' || 'H' || '?': // Help option
-                printf("Usage: %s [-p port] [-b buffer_size] [-i interval] [-f log_file] [-h]/[-H]/[-?]\n", argv[0]);
+                printf("Usage: %s [-p port] [-b buffer_size] [-i interval] [-l connection limit] [-f log_file] [-h]/[-H]/[-?]\n", argv[0]);
                 exit(EXIT_SUCCESS);
             default:
-                fprintf(stderr, "Usage: %s [-p port] [-b buffer_size] [-i interval] [-f log_file] [-h]/[-H]/[-?]\n", argv[0]);
+                fprintf(stderr, "Usage: %s [-p port] [-b buffer_size] [-i interval] [-l connection limit] [-f log_file] [-h]/[-H]/[-?]\n", argv[0]);
                 exit(EXIT_FAILURE);
         }
     }
@@ -105,7 +113,7 @@ int main(int argc, char const* argv[]) {
     int first_run = 1;
     FILE *logf = fopen(LOG_FILE, "w");
     fprintf(logf, "{\"data\": [\n"); // Initialize JSON log file with an opening bracket
-    while (1) {
+    while (limit-- != 0) {
         if (first_run) { // If this is the first connection, do not add a comma
             first_run = 0;
         } else {

@@ -34,10 +34,11 @@ def get_text_from_metrics(performance_analysis_data: dict, visualization_data: d
     text.append(f"\n\n{'-'*60}")
 
     text.append(f"\n\nAggregate iPerf throughput (sum_received): {total_analysis_data['agg_iperf_throughput']:.2f} Mbps")
-    
+    text.append(f"\nAggregate My Speedtest throughput (sum_received): {total_analysis_data.get('agg_my_speedtest_throughput', 0):.2f} Mbps")
+
     overall_theoretical_throughput = total_analysis_data['total_improved_throughput'] / total_analysis_data['total_improved_throughput_time'] if total_analysis_data['total_improved_throughput_time'] > 0 else 0
     text.append(f"\nOverall theoretical throughput (Wi-Fi Doctor, 30s avg): {overall_theoretical_throughput:.2f} Mbps")
-
+    
         
     text.append(f"\n\n{'-'*60}")
 
@@ -53,13 +54,25 @@ def parse_iperf_json(iperf_json_path):
     for idx, interval in enumerate(intervals):
         # Use the 'sum' field for total throughput in this interval
         start_time = interval["sum"]["start"]
-        throughput_mbps = interval["sum"]["bits_per_second"] / 1e6  # Convert to Mbps
+        throughput_mbps = interval["sum"]["bits_per_second"] / 1048576.0  # Convert to Mbps
         timeseries.append({"time": int(start_time), "throughput": throughput_mbps})
     # Also get the aggregate throughput from sum_received
-    agg_throughput = iperf_data["end"]["sum_received"]["bits_per_second"] / 1e6  # Mbps
+    agg_throughput = iperf_data["end"]["sum_received"]["bits_per_second"] / 1048576.0  # Mbps
     return timeseries, agg_throughput
 
-## end project 2
+def parse_my_speedtest_json(my_speedtest_path):
+    with open(my_speedtest_path, "r") as f:
+        my_speedtest_data = json.load(f)
+    intervals = my_speedtest_data["data"][0]["intervals"]
+    timeseries = []
+    for idx, interval in enumerate(intervals):
+        # Use the 'sum' field for total throughput in this interval
+        start_time = interval["timestamp"]
+        throughput_mbps = interval["bits_per_second"] / 1048576.0  # Convert to Mbps
+        timeseries.append({"time": int(start_time), "throughput": throughput_mbps})
+    # Also get the aggregate throughput from sum_received
+    agg_throughput = intervals[-1]["total_throughput_mbps"] / 1048576.0  # Mbps
+    return timeseries, agg_throughput
 
 def process_packets(reader, i, start_time, src_address=None, dst_address=None, iperf_json_path="iperflogs", my_speedtest_path="speedtestlogs"):
     performance_analysis_data = {
@@ -80,6 +93,8 @@ def process_packets(reader, i, start_time, src_address=None, dst_address=None, i
         'phy_gap_values': [],
         'iperf_throughput_times': [],
         'iperf_throughput_values': [],
+        'my_throughput_times': [],
+        'my_throughput_values': [],
         'max_throughput': 0,
         'min_throughput': float('inf'),
         'mean_throughput': 0,
@@ -90,8 +105,11 @@ def process_packets(reader, i, start_time, src_address=None, dst_address=None, i
 
     # Try to load iperf throughput from JSON file (every 2 seconds)
     iperf_json_data = []
-    iperf_json_data, total_analysis_data['agg_iperf_throughput'] = parse_iperf_json("iperflogs")
+    iperf_json_data, total_analysis_data['agg_iperf_throughput'] = parse_iperf_json(iperf_json_path)
 
+    # Try to load my_speedtest throughput from JSON file (every 2 seconds)
+    my_speedtest_json_data = []
+    my_speedtest_json_data, total_analysis_data['agg_my_speedtest_throughput'] = parse_my_speedtest_json(my_speedtest_path)    
     # --- Process all packets and bin into 2-second windows for 30 seconds ---
     window_size = 2
     total_duration = 30
@@ -107,22 +125,22 @@ def process_packets(reader, i, start_time, src_address=None, dst_address=None, i
             break
         info = reader.get_80211_info(packet)
 
-        pkt_time = info.get('timestamp')
-        if window_start_time is None and pkt_time is not None:
-            window_start_time = pkt_time
+        if (src_address and info['ta'] != src_address) or (dst_address and info['ra'] != dst_address):
+            pass # Not the requested source/destination address
+        else:        
+            pkt_time = info.get('timestamp')
+            if window_start_time is None and pkt_time is not None:
+                window_start_time = pkt_time
 
-        # Bin the packet into the correct window
-        if pkt_time is not None and window_start_time is not None:
-            rel_time = pkt_time - window_start_time
-            window_idx = int(rel_time // window_size)
-            if 0 <= window_idx < num_windows:
-                if (src_address and info['ta'] != src_address) or (dst_address and info['ra'] != dst_address):
-                    pass # Not the requested source/destination address
-                else:
+            # Bin the packet into the correct window
+            if pkt_time is not None and window_start_time is not None:
+                rel_time = pkt_time - window_start_time
+                window_idx = int(rel_time // window_size)
+                if 0 <= window_idx < num_windows:
                     window_bins[window_idx].append(info)
                     processed_packets += 1
                     print(f"\rProcessed {processed_packets} packets...", end='\r', flush=True)
-            # Ignore packets outside the 30s window
+                # Ignore packets outside the 30s window
 
         if i > 0 and processed_packets >= i:
             break
@@ -140,12 +158,12 @@ def process_packets(reader, i, start_time, src_address=None, dst_address=None, i
         for info in window:
             data_rate = float(info['data_rate']) if info['data_rate'] else 0
             pkt_len = info.get('length', 1500)
-            window_data_rate_sum += data_rate
+            window_data_rate_sum += data_rate * 8
             window_rssi_sum += int(info['signal_dbm']) if info['signal_dbm'] else 0
             window_phy_gap_sum += info['phy_gap'] if info['phy_gap'] else 0
             window_retry_packets += int(info['fc_retry']) if info['fc_retry'] else 0
             # Busy time calculation
-            busy_time += (pkt_len * 8) / (data_rate * 1e6) if data_rate > 0 else 0
+            busy_time += (pkt_len * 8) / (data_rate * 1048576.0) if data_rate > 0 else 0
         avg_data_rate_window = window_data_rate_sum / window_packets if window_packets > 0 else 0
         frame_loss_window = window_retry_packets / window_packets if window_packets > 0 else 0
         avg_rssi_window = window_rssi_sum / window_packets if window_packets > 0 else 0
@@ -180,7 +198,7 @@ def process_packets(reader, i, start_time, src_address=None, dst_address=None, i
         performance_analysis_data['channel_util'] += channel_utilization
     
      # --- Prepare iperf throughput for plotting ---
-    for win_idx in range(num_windows):
+    for win_idx in range(len(iperf_json_data)):
         if win_idx < len(iperf_json_data):
             entry = iperf_json_data[win_idx]
             visualization_data['iperf_throughput_times'].append(entry.get("time", win_idx * window_size))
@@ -188,6 +206,18 @@ def process_packets(reader, i, start_time, src_address=None, dst_address=None, i
         else:
             visualization_data['iperf_throughput_times'].append(win_idx * window_size)
             visualization_data['iperf_throughput_values'].append(0)
+    
+    for win_idx in range(len(my_speedtest_json_data)):
+        if win_idx < len(my_speedtest_json_data):
+            entry = my_speedtest_json_data[win_idx]
+            visualization_data['my_throughput_times'].append(entry.get("time", win_idx * window_size))
+            visualization_data['my_throughput_values'].append(entry.get("throughput", 0))
+        else:
+            visualization_data['my_throughput_times'].append(win_idx * window_size)
+            visualization_data['my_throughput_values'].append(0)
+
+    # --- Prepare my_speedtest throughput for plotting ---
+
        
     dbg_text = get_text_from_metrics(performance_analysis_data, visualization_data, total_analysis_data, start_time)
     if DBG_MODE:
@@ -195,9 +225,8 @@ def process_packets(reader, i, start_time, src_address=None, dst_address=None, i
     
     # --- Plot the results ---
     plt.figure(1, figsize=(12, 8))
-    plt.subplot(1, 2, 1)
+    plt.subplot2grid((2, 2), (0, 0))
     plt.plot(visualization_data['improved_throughput_times'], visualization_data['improved_throughput_values'], marker='o', label="Improved (Wi-Fi Doctor)")
-    plt.plot(visualization_data['improved_throughput_times'], visualization_data['data_rate_values'], label="Data Rate", linestyle='--')
     plt.plot(visualization_data['improved_throughput_times'], visualization_data['frame_loss_values'], label="Frame Loss", linestyle='--')
     plt.plot(visualization_data['improved_throughput_times'], visualization_data['rssi_values'], label="RSSI", linestyle='--')
     plt.plot(visualization_data['improved_throughput_times'], visualization_data['phy_gap_values'], label="PHY Gap", linestyle='--')
@@ -209,16 +238,25 @@ def process_packets(reader, i, start_time, src_address=None, dst_address=None, i
     plt.axhline(y=visualization_data['75th_percentile_throughput'], color='m', linestyle='--', label="75th Percentile Throughput")
     plt.axhline(y=visualization_data['95th_percentile_throughput'], color='y', linestyle='--', label="95th Percentile Throughput")
     
-    # Plot iPerf throughput
-    plt.plot(visualization_data['iperf_throughput_times'], visualization_data['iperf_throughput_values'], marker='s', label="iPerf")
+    plt.xlabel("Time (s)")
+    plt.ylabel("Throughput (Mbps)")
+    plt.title("Throughput Every 2 Seconds")
+    plt.grid()
+    plt.legend()
     
+    # Plot iPerf throughput
+    plt.subplot2grid((2, 2), (1, 0))
+    plt.plot(visualization_data['improved_throughput_times'], visualization_data['data_rate_values'], label="Data Rate", linestyle='--')
+    plt.plot(visualization_data['iperf_throughput_times'], visualization_data['iperf_throughput_values'], marker='s', label="iPerf")
+    plt.plot(visualization_data['my_throughput_times'], visualization_data['my_throughput_values'], marker='^', label="My Speedtest")
+
     plt.xlabel("Time (s)")
     plt.ylabel("Throughput (Mbps)")
     plt.title("Throughput Every 2 Seconds")
     plt.grid()
     plt.legend()
 
-    plt.subplot(1, 2, 2)
+    plt.subplot2grid((2, 2), (0,1), rowspan=2)
     plt.text(0.01, 0.5, dbg_text, 
                         fontsize=10, ha='left', va='center', family=['monospace'], transform=plt.gca().transAxes)
     plt.axis('off')
